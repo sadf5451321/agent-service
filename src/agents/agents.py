@@ -12,11 +12,12 @@ from agents.knowledge_base_agent import kb_agent
 from agents.langgraph_supervisor_agent import langgraph_supervisor_agent
 from agents.langgraph_supervisor_hierarchy_agent import langgraph_supervisor_hierarchy_agent
 from agents.lazy_agent import LazyLoadingAgent
+from agents.openreview_agent import openreview_agent
 from agents.rag_assistant import rag_assistant
 from agents.research_assistant import research_assistant
 from schema import AgentInfo
 
-DEFAULT_AGENT = "research-assistant"
+DEFAULT_AGENT = "rag-assistant"
 
 # Type alias to handle LangGraph's different agent patterns
 # - @entrypoint functions return Pregel
@@ -60,6 +61,10 @@ agents: dict[str, Agent] = {
     "github-mcp-agent": Agent(
         description="A GitHub agent with MCP tools for repository management and development workflows.",
         graph_like=github_mcp_agent,
+    ),
+    "openreview-agent": Agent(
+        description="An agent specialized in searching academic papers from OpenReview (ICML, NeurIPS, ICLR, etc.).",
+        graph_like=openreview_agent,
     ),
 }
 

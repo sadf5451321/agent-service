@@ -1,6 +1,9 @@
+import asyncio
+from langchain_core.messages.ai import AIMessage
 import logging
 import os
 from typing import Any
+from unittest import result
 
 from langchain_aws import AmazonKnowledgeBasesRetriever
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -79,7 +82,7 @@ def wrap_model(model: BaseChatModel) -> RunnableSerializable[AgentState, AIMessa
         create_system_message,
         name="StateModifier",
     )
-    return RunnableSequence(preprocessor, model)
+    return RunnableSequence[AgentState, AIMessage](preprocessor, model)
 
 
 async def retrieve_documents(state: AgentState, config: RunnableConfig) -> AgentState:
@@ -172,3 +175,36 @@ agent.add_edge("model", END)
 
 # Compile the agent
 kb_agent = agent.compile()
+
+
+
+async def main():
+    print("starting knowledge base Agent")
+
+
+    kb_id = os.environ.get("AWS_KB_ID")
+
+    if not kb_id:
+        print("warming ASK_KB_ID")
+        pass
+    query="what is langggraph and how does it relate to langchain?"
+
+    print(f"\n user query:{query}")
+
+    try:
+        result = await kb_agent.ainvoke({"messages":[HumanMessage(content=query)]})
+
+    except Exception as e:
+        print(f"Agent exection failed {e}")
+
+        return 
+
+
+    print("\n Agent Response\n")
+
+    for msg in result["messages"]:
+        print(msg.content)
+
+
+# if __name__== "__main__":
+# asyncio.run(main())

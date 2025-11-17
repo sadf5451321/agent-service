@@ -1,7 +1,5 @@
 from datetime import datetime
 from typing import Literal
-from langchain_community.tools import DuckDuckGoSearchResults, OpenWeatherMapQueryRun
-from langchain_community.utilities import OpenWeatherMapAPIWrapper
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda, RunnableSerializable
@@ -10,42 +8,38 @@ from langgraph.managed import RemainingSteps
 from langgraph.prebuilt import ToolNode
 
 from agents.llama_guard import LlamaGuard, LlamaGuardOutput, SafetyAssessment
-from agents.tools import calculator
+from agents.tools import openreview_search
 from core import get_model, settings
 
 
 class AgentState(MessagesState, total=False):
-    """`total=False` is PEP589 specs.
-    documentation: https://typing.readthedocs.io/en/latest/spec/typeddict.html#totality
-    """
+
     safety: LlamaGuardOutput
     remaining_steps: RemainingSteps
 
 
-web_search = DuckDuckGoSearchResults(name="WebSearch")
-
-tools = [web_search, calculator]
-
-# Add weather tool if API key is set
-# Register for an API key at https://openweathermap.org/api/
-if settings.OPENWEATHERMAP_API_KEY:
-    wrapper = OpenWeatherMapAPIWrapper(
-        openweathermap_api_key=settings.OPENWEATHERMAP_API_KEY.get_secret_value()
-    )
-    tools.append(OpenWeatherMapQueryRun(name="Weather", api_wrapper=wrapper))
+tools = [openreview_search]
 
 current_date = datetime.now().strftime("%B %d, %Y")
 instructions = f"""
-    You are a helpful research assistant with the ability to search the web and use other tools.
+    You are a helpful academic paper search assistant specialized in finding papers from OpenReview.
     Today's date is {current_date}.
 
-    NOTE: THE USER CAN'T SEE THE TOOL RESPONSE.
+    You have access to the OpenReview_Search tool which can search for papers from conferences like:
+    - ICML (International Conference on Machine Learning)
+    - NeurIPS (Neural Information Processing Systems)
+    - ICLR (International Conference on Learning Representations)
+    - And other conferences hosted on OpenReview
 
-    A few things to remember:
-    - Please include markdown-formatted links to any citations used in your response. Only include one
-    or two citations per response unless more are needed. ONLY USE LINKS RETURNED BY THE TOOLS.
-    - Use calculator tool with numexpr to answer math questions. The user does not understand numexpr,
-      so for the final response, use human readable format - e.g. "300 * 200", not "(300 \\times 200)".
+    NOTE: THE USER CAN'T SEE THE TOOL RESPONSE DIRECTLY.
+
+    Guidelines:
+    - When searching for papers, you can specify the venue (e.g., "ICML 2025 oral", "NeurIPS 2024")
+    - You can search for papers from different conferences by adjusting the venue and domain parameters
+    - Always provide a summary of the papers found, including titles, authors, and key information
+    - If the user asks about a specific conference or year, use the appropriate parameters
+    - Format your responses clearly with paper titles, authors, and brief summaries
+    - You can search for papers by default parameters or customize based on user requests
     """
 
 
@@ -67,6 +61,7 @@ def format_safety_message(safety: LlamaGuardOutput) -> AIMessage:
 
 async def acall_model(state: AgentState, config: RunnableConfig) -> AgentState:
     m = get_model(config["configurable"].get("model", settings.DEFAULT_MODEL))
+
     model_runnable = wrap_model(m)
     response = await model_runnable.ainvoke(state, config)
 
@@ -104,6 +99,7 @@ async def block_unsafe_content(state: AgentState, config: RunnableConfig) -> Age
 agent = StateGraph(AgentState)
 agent.add_node("model", acall_model)
 agent.add_node("tools", ToolNode(tools))
+
 agent.add_node("guard_input", llama_guard_input)
 agent.add_node("block_unsafe_content", block_unsafe_content)
 agent.set_entry_point("guard_input")
@@ -143,4 +139,5 @@ def pending_tool_calls(state: AgentState) -> Literal["tools", "done"]:
 agent.add_conditional_edges("model", pending_tool_calls, {"tools": "tools", "done": END})
 
 
-research_assistant = agent.compile()
+openreview_agent = agent.compile()
+

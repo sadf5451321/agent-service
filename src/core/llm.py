@@ -134,6 +134,8 @@ def get_model(model_name: AllModelEnum, /) -> ModelT:
             base_url="https://openrouter.ai/api/v1/",
             api_key=settings.OPENROUTER_API_KEY,
         )
+
+        
     if model_name in FakeModelName:
         return FakeToolModel(responses=["This is a test response from the fake model."])
 

@@ -7,13 +7,7 @@ from langgraph.types import Command
 
 
 class AgentState(MessagesState, total=False):
-    """`total=False` is PEP589 specs.
-
-    documentation: https://typing.readthedocs.io/en/latest/spec/typeddict.html#totality
-    """
-
-
-# Define the nodes
+    pass
 
 
 def node_a(state: AgentState) -> Command[Literal["node_b", "node_c"]]:
@@ -26,11 +20,11 @@ def node_a(state: AgentState) -> Command[Literal["node_b", "node_c"]]:
     else:
         goto = "node_c"
 
-    # note how Command allows you to BOTH update the graph state AND route to the next node
-    return Command(
-        # this is the state update
+
+    return Command[Literal['node_b', 'node_c']](
+
         update={"messages": [AIMessage(content=f"Hello {value}")]},
-        # this is a replacement for an edge
+
         goto=goto,
     )
 

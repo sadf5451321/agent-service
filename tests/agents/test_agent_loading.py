@@ -1,12 +1,17 @@
 """Tests for agent loading functionality."""
 
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from agents.agents import agents, get_agent, load_agent
-from agents.lazy_agent import LazyLoadingAgent
+# 添加 src 目录到 Python 路径，以便直接运行测试文件时也能正确导入
+if str(Path(__file__).parent.parent.parent / "src") not in sys.path:
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
+from agents.agents import agents, get_agent, load_agent
+from agents.lazy_agent import LazyLoadingAgent 
 
 class TestAgentLoading:
     """Test agent loading functionality."""

@@ -21,6 +21,7 @@ from langsmith import Client as LangsmithClient
 
 from agents import DEFAULT_AGENT, AgentGraph, get_agent, get_all_agent_info, load_agent
 from core import settings
+
 from memory import initialize_database, initialize_store
 from schema import (
     ChatHistory,
@@ -98,6 +99,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(lifespan=lifespan, generate_unique_id_function=custom_generate_unique_id)
+
 router = APIRouter(dependencies=[Depends(verify_bearer)])
 
 

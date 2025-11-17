@@ -18,7 +18,6 @@ class LazyLoadingAgent(ABC):
     async def load(self) -> None:
         """
         Perform async loading for this agent.
-
         This method is called during service startup and should handle:
         - Setting up external connections (MCP clients, databases, etc.)
         - Loading tools or resources

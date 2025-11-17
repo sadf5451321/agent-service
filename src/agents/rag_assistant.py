@@ -102,11 +102,14 @@ async def block_unsafe_content(state: AgentState, config: RunnableConfig) -> Age
 
 
 # Define the graph
-agent = StateGraph(AgentState)
+agent = StateGraph[AgentState, AgentState, AgentState](AgentState)
+
 agent.add_node("model", acall_model)
 agent.add_node("tools", ToolNode(tools))
 agent.add_node("guard_input", llama_guard_input)
 agent.add_node("block_unsafe_content", block_unsafe_content)
+
+# Always run "model" after "tools"
 agent.set_entry_point("guard_input")
 
 

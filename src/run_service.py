@@ -1,10 +1,9 @@
 import asyncio
 import logging
+from re import T
 import sys
-
 import uvicorn
 from dotenv import load_dotenv
-
 from core import settings
 
 load_dotenv()
@@ -32,6 +31,6 @@ if __name__ == "__main__":
         "service:app",
         host=settings.HOST,
         port=settings.PORT,
-        reload=settings.is_dev(),
-        timeout_graceful_shutdown=settings.GRACEFUL_SHUTDOWN_TIMEOUT,
+        reload=True
+        # timeout_graceful_shutdown=settings.GRACEFUL_SHUTDOWN_TIMEOUT,
     )
