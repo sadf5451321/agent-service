@@ -23,14 +23,18 @@ services:
       - "8080:8080"
     env_file:
       - .env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/info"]
-      interval: 5s
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8080/info', timeout=5).raise_for_status()"]
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 3
+      start_period: 30s
     # Volume mount of development-only credentials since compose watch doesn't sync ignored files and doesn't do initial sync when the service starts
     volumes:
       - ./privatecredentials:/privatecredentials
@@ -60,12 +64,14 @@ services:
     depends_on:
       - agent_service
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/healthz"]
-      interval: 5s
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8501/healthz', timeout=5).raise_for_status()"]
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 3
+      start_period: 30s
     environment:
       - AGENT_URL=http://agent_service:8080
+      - STREAMLIT_APP=${STREAMLIT_APP:-streamlit_app.py}
     develop:
       watch:
         - path: src/client/
@@ -77,6 +83,9 @@ services:
         - path: src/streamlit_app.py
           action: sync+restart
           target: /app/streamlit_app.py
+        - path: src/arg_app.py
+          action: sync+restart
+          target: /app/arg_app.py
 
 volumes:
   postgres_data:

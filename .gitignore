@@ -191,3 +191,26 @@ cython_debug/
 # Private Credentials, ignore everything in the folder but the .gitkeep file
 privatecredentials/*
 !privatecredentials/.gitkeep
+
+
+# Vector Databases
+chroma_db*/
+chroma_db_mixed/
+qdrant_db/
+
+# Embedding Models Cache
+embedding.model/
+
+# Application Logs
+logs/
+*.log
+
+# Temporary test directories
+tests1/
+
+# UV package manager
+.uv/
+
+# OS specific
+Thumbs.db
+.DS_Store

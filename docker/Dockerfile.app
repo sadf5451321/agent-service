@@ -17,5 +17,10 @@ RUN uv sync --frozen --only-group client
 COPY src/client/ ./client/
 COPY src/schema/ ./schema/
 COPY src/streamlit_app.py .
+COPY src/arg_app.py .
 
-CMD ["streamlit", "run", "streamlit_app.py"]
+# Create a startup script that uses environment variable
+RUN echo '#!/bin/sh\nstreamlit run "${STREAMLIT_APP:-streamlit_app.py}"' > /app/start.sh && \
+    chmod +x /app/start.sh
+
+CMD ["/app/start.sh"]
