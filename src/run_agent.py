@@ -30,6 +30,10 @@ async def main(agent_id: str, message: str, model: str | None = None) -> None:
 
 
     try:
+        #cast 类型检查 
+        logger.info(f"加载智能体: {agent_id}")
+        logger.info(f"message: {message}")
+        logger.info(f"model: {model}")
         agent = cast(CompiledStateGraph, get_agent(agent_id))
     except (KeyError, RuntimeError) as e:
         print(f"错误: 无法加载智能体 '{agent_id}': {e}")

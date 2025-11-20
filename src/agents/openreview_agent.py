@@ -10,7 +10,9 @@ from langgraph.prebuilt import ToolNode
 from agents.llama_guard import LlamaGuard, LlamaGuardOutput, SafetyAssessment
 from agents.tools import openreview_search
 from core import get_model, settings
+from core.logging_config import get_logger
 
+logger = get_logger(__name__)
 
 class AgentState(MessagesState, total=False):
 
@@ -44,15 +46,19 @@ instructions = f"""
 
 
 def wrap_model(model: BaseChatModel) -> RunnableSerializable[AgentState, AIMessage]:
+    # 让模型知道有哪些工具可以调用
     bound_model = model.bind_tools(tools)
     preprocessor = RunnableLambda(
+        # 添加系统提示词
         lambda state: [SystemMessage(content=instructions)] + state["messages"],
         name="StateModifier",
     )
+    logger.info(f"preprocessor: {preprocessor}")
     return preprocessor | bound_model  # type: ignore[return-value]
 
 
 def format_safety_message(safety: LlamaGuardOutput) -> AIMessage:
+    logger.info(f"format_safety_message_safety: {safety}")
     content = (
         f"This conversation was flagged for unsafe content: {', '.join(safety.unsafe_categories)}"
     )
@@ -60,7 +66,10 @@ def format_safety_message(safety: LlamaGuardOutput) -> AIMessage:
 
 
 async def acall_model(state: AgentState, config: RunnableConfig) -> AgentState:
+    logger.info(f"acall_model_state: {state}")
     m = get_model(config["configurable"].get("model", settings.DEFAULT_MODEL))
+
+    logger.info(f"config: {config}")
 
     model_runnable = wrap_model(m)
     response = await model_runnable.ainvoke(state, config)
@@ -91,28 +100,35 @@ async def llama_guard_input(state: AgentState, config: RunnableConfig) -> AgentS
 
 
 async def block_unsafe_content(state: AgentState, config: RunnableConfig) -> AgentState:
+    logger.info(f"block_unsafe_content_state: {state}")
     safety: LlamaGuardOutput = state["safety"]
+    logger.info(f"safety: {safety}")
     return {"messages": [format_safety_message(safety)]}
 
 
 # Define the graph
 agent = StateGraph(AgentState)
+agent.add_node("guard_input", llama_guard_input)
+agent.add_node("block_unsafe_content", block_unsafe_content)
+
 agent.add_node("model", acall_model)
 agent.add_node("tools", ToolNode(tools))
 
-agent.add_node("guard_input", llama_guard_input)
-agent.add_node("block_unsafe_content", block_unsafe_content)
-agent.set_entry_point("guard_input")
 
 
 # Check for unsafe input and block further processing if found
 def check_safety(state: AgentState) -> Literal["unsafe", "safe"]:
+    logger.info(f"check_safety_state: {state}")
     safety: LlamaGuardOutput = state["safety"]
+    logger.info(f"safety: {safety}")
     match safety.safety_assessment:
         case SafetyAssessment.UNSAFE:
             return "unsafe"
         case _:
             return "safe"
+
+agent.set_entry_point("guard_input")
+
 
 
 agent.add_conditional_edges(
@@ -128,14 +144,20 @@ agent.add_edge("tools", "model")
 
 # After "model", if there are tool calls, run "tools". Otherwise END.
 def pending_tool_calls(state: AgentState) -> Literal["tools", "done"]:
+
+    logger.debug(f"pending_tool_calls_state: {state}")
+
     last_message = state["messages"][-1]
+
+    logger.debug(f"last_message: {last_message}")
+
     if not isinstance(last_message, AIMessage):
         raise TypeError(f"Expected AIMessage, got {type(last_message)}")
     if last_message.tool_calls:
         return "tools"
     return "done"
 
-
+# After the tool finishes processing, the result is passed back to the large language model
 agent.add_conditional_edges("model", pending_tool_calls, {"tools": "tools", "done": END})
 
 
