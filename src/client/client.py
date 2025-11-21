@@ -1,7 +1,7 @@
 import json
 import os
 from collections.abc import AsyncGenerator, Generator
-from typing import Any
+from typing import Any, List, Optional
 
 import httpx
 
@@ -360,3 +360,128 @@ class AgentClient:
             raise AgentClientError(f"Error: {e}")
 
         return ChatHistory.model_validate(response.json())
+
+    async def aupload_files_and_create_vector_db(
+        self,
+        files: List[tuple],  # List of (filename, file_content) tuples
+        db_name: str = "chroma_db_uploaded",
+        chunk_size: int = 2000,
+        overlap: int = 500,
+        use_local_embedding: bool = True,
+        model_name: str = "BAAI/bge-m3",
+        auto_switch: bool = True,
+        db_type: str = "qdrant",
+    ) -> dict[str, Any]:
+        """
+        上传文件并创建向量数据库（异步）
+        
+        Args:
+            files: 文件列表，每个元素是 (filename, file_content) 元组
+            db_name: 向量数据库名称
+            chunk_size: 文本块大小
+            overlap: 文本块重叠
+            use_local_embeddings: 是否使用本地 embedding 模型
+            model_name: 本地模型名称
+        
+        Returns:
+            包含处理结果的字典
+        """
+        files_data = []
+        for filename, content in files:
+            files_data.append(("files", (filename, content, "application/octet-stream")))
+        
+        data = {
+            "db_name": db_name,
+            "chunk_size": chunk_size,
+            "overlap": overlap,
+            "use_local_embedding": use_local_embedding,
+            "model_name": model_name,
+            "auto_switch": auto_switch,
+            "db_type": db_type,
+        }
+        
+        async with httpx.AsyncClient(timeout=300.0) as client:  # 增加超时时间，文件处理可能较慢
+            try:
+                response = await client.post(
+                    f"{self.base_url}/vector-db/upload",
+                    files=files_data,
+                    data=data,
+                    headers=self._headers,
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as e:
+                raise AgentClientError(f"Error uploading files: {e}")
+        
+        return response.json()
+
+    def upload_files_and_create_vector_db(
+        self,
+        files: List[tuple],
+        db_name: str = "chroma_db_uploaded",
+        chunk_size: int = 2000,
+        overlap: int = 500,
+        use_local_embedding: bool = False,
+        model_name: str = "BAAI/bge-small-en-v1.5",
+        auto_switch: bool = True,
+        db_type: str = "qdrant",
+    ) -> dict[str, Any]:
+        """
+        上传文件并创建向量数据库（同步）
+        """
+        import asyncio
+        return asyncio.run(
+            self.aupload_files_and_create_vector_db(
+                files=files,
+                db_name=db_name,
+                chunk_size=chunk_size,
+                overlap=overlap,
+                use_local_embedding=use_local_embedding,
+                model_name=model_name,
+                auto_switch=auto_switch,
+                db_type=db_type,
+            )
+        )
+    
+    async def aswitch_vector_db(
+        self,
+        db_path: str,
+        db_type: str = "qdrant",  # 新增参数
+        collection_name: Optional[str] = None,  # 新增参数
+    ) -> dict[str, Any]:
+        """
+        切换向量数据库路径（异步）
+        
+        Args:
+            db_path: 新的数据库路径
+            db_type: 数据库类型 ("chroma" 或 "qdrant")
+            collection_name: 集合名（仅 Qdrant 需要）
+        """
+        data = {
+            "db_path": db_path,
+            "db_type": db_type,
+        }
+        if collection_name:
+            data["collection_name"] = collection_name
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    f"{self.base_url}/vector-db/switch",
+                    data=data,
+                    headers=self._headers,
+                )
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPError as e:
+                raise AgentClientError(f"Error switching vector database: {e}")
+
+    def switch_vector_db(self, db_path: str) -> dict[str, Any]:
+        """
+        切换向量数据库路径（同步）
+        """
+        import asyncio
+        return asyncio.run(self.aswitch_vector_db(db_path))
+
+
+
+

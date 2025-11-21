@@ -1,12 +1,14 @@
 import inspect
 import json
 import logging
+from re import T
 import warnings
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 from uuid import UUID, uuid4
 
+from click.core import V
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
@@ -425,6 +427,252 @@ async def health_check():
             health_status["langfuse"] = "disconnected"
 
     return health_status
+
+from fastapi import UploadFile,File,Form
+from typing import List
+from pathlib import Path
+import os
+import shutil
+from langchain_chroma import Chroma
+
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+import tempfile
+from langchain_community.document_loaders import (
+    Docx2txtLoader,
+    PyPDFLoader,
+    TextLoader,
+
+)
+
+@router.post("/vector-db/upload")
+async def upload_files_to_chroma_db(
+    files: List[UploadFile]=File(...),
+    db_name:str=Form("chroma_db_uploader"),
+    chunk_size:int = Form(2000),
+    overlap:int =  Form(500),
+    use_local_embedding : bool = Form(True),
+    model_name:str = Form("BAAI/bge-m3"),
+    auto_switch:bool = Form(False),
+    db_type:str = Form("qdrant")
+    ):
+    result = {
+        "success":False,
+        "db_name":db_name,
+        "total_files":len(files),
+        "total_chunks":0,
+        "processed_files":[],
+        "errors":[]
+    }
+
+    try:
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            saved_files = []
+            for upload_file in files :
+                file_path = Path(temp_dir) / upload_file.filename
+                with open(file_path,"wb") as f:
+                    content = await upload_file.read()
+                    f.write(content)
+                saved_files.append(file_path)
+
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            
+            if use_local_embedding:
+                from langchain_community.embeddings import HuggingFaceEmbeddings
+                cache_folder = os.path.join(os.getcwd(),"embedding.model")
+
+                embeddings = HuggingFaceEmbeddings(
+                    model_name = model_name,
+                    cache_folder = cache_folder,
+                    model_kwargs = {"device": "cpu"},
+                    encode_kwargs = {"normalize_embeddings": True},
+                )
+            else:
+                pass
+                # from langchain_openai import OpenAIEmbeddings 
+                # embeddings = OpenAIEmbeddings()
+            
+            db_path = Path(db_name)
+
+            if not db_path.is_absolute():
+                db_path = Path(os.getcwd())/db_path
+            
+            db_type = db_type.lower()
+
+            if db_type == "qdrant":
+                try:
+                    from langchain_qdrant import QdrantVectorStore
+                    from qdrant_client import QdrantClient
+                    from qdrant_client.models import Distance,VectorParams
+                
+                except ImportError:
+                    result['errors'].append("请安装langchain-qdrant和qdrant-client")
+                    return result
+                if db_path.exists():
+                    shutil.rmtree(db_path)
+
+                client = QdrantClient(path=str(db_path))
+                embedding_dim = len(embeddings.embed_query("test"))
+
+           
+                collection_name = "documents"
+                try :
+                    client.get_collection(collection_name)
+                
+                except Exception:
+                    client.create_collection(
+                        collection_name=collection_name,
+                        vectors_config=VectorParams(size=embedding_dim,distance=Distance.COSINE),
+                    )
+                
+                vector_store = QdrantVectorStore(
+                    client= client,
+                    collection_name = collection_name,
+                    embedding = embeddings,
+
+                )
+            else:
+                if db_path.exists():
+                    shutil.rmtree(db_path)
+                vector_store = Chroma(
+                    embedding_function = embeddings,
+                    persist_directory = str(db_path)
+                )
+
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size = chunk_size,
+                chunk_overlap = overlap
+            )
+
+            for file_path in saved_files:
+                filename = file_path.name
+                try:
+                    if filename.endswith(".pdf"):
+                        loader = PyPDFLoader(file_path)
+                    elif filename.endswith(".docx"):
+                        loader = Docx2txtLoader(file_path)
+                    elif filename.endswith(".txt"):
+                        try:
+                            loader = TextLoader(file_path, encoding="utf-8")
+                        except UnicodeDecodeError:
+                            try:
+                                loader = TextLoader(file_path, encoding="gbk")
+                            except UnicodeDecodeError:
+                                loader = TextLoader(file_path, encoding="latin-1")
+                    else:
+                        result["errors"].append(f"不支持数据类型: {filename}")
+                        continue
+                    
+                    documents =loader.load()
+                    chunks = text_splitter.split_documents(documents)
+
+                    if chunks:
+                        vector_store.add_documents(chunks)
+                        result["total_chunks"] += len(chunks)
+                        result["processed_files"].append(
+                            {"filename":filename,"chunks":len(chunks)}
+                        )
+                except Exception as e:
+                    result['errors'].append(f"Error loading file {filename}: {str(e)}")
+                    continue
+
+
+            result["success"] = True
+            result["db_path"] = str(db_path)
+            result['db_type'] = db_type
+
+
+        
+            if auto_switch == True:
+                try:
+                    from agents.tools import clear_retriever_cache
+                    # 更新环境变量
+                    os.environ["VECTOR_DB_TYPE"] = db_type
+                    if db_type == "qdrant":
+                        os.environ["QDRANT_PATH"] = str(db_path)
+                        os.environ["QDRANT_COLLECTION"] = collection_name
+                    else:
+                        os.environ["CHROMA_DB_PATH"] = str(db_path)
+                    
+                    # 清除缓存，强制重新加载
+                    clear_retriever_cache()
+                    
+                    result["switched"] = True
+                    result["message"] = f"数据库创建成功并已自动切换到: {db_path}"
+                    logger.info(f"Database created and auto-switched to: {db_path} (type: {db_type})")
+                except Exception as e:
+                    result["switched"] = False
+                    result["switch_error"] = str(e)
+                    logger.warning(f"Database created but failed to auto-switch: {e}")
+            else:
+                result['auto_switch'] = False
+                result['message'] = "向量数据库创建成功，但未自动切换"
+
+
+    except Exception as e:
+        result["errors"].append(f"创建向量数据库出错：{str(e)}")
+        logger.error(f"error creating vector database:{e}",exc_info=True)
+
+
+    return result
+
+from agents.tools import clear_retriever_cache
+import os
+from typing import Optional
+
+@router.post("/vector-db/switch")
+async def switch_vector_db(
+    db_type: str = Form(...),
+    db_path: str = Form(...),
+    collection_name: Optional[str] = Form(None)
+):
+    """
+    切换向量数据库类型和路径
+    
+    Args:
+        db_type: 数据库类型 ("chroma" 或 "qdrant")
+        db_path: 数据库路径
+        collection_name: 集合名（仅 Qdrant 需要，默认 "documents")
+    
+    Returns:
+        切换结果
+    """
+    from agents.tools import clear_retriever_cache
+
+    try:
+        db_type = db_type.lower()
+        if db_type not in ["chroma", "qdrant"]:
+            raise HTTPException(status_code=400, detail="Invalid database type. Supported types: chroma, qdrant")
+        
+        # 修复：必须设置 VECTOR_DB_TYPE 环境变量
+        os.environ["VECTOR_DB_TYPE"] = db_type
+        
+        if db_type == "qdrant":
+            os.environ["QDRANT_PATH"] = db_path
+            os.environ["QDRANT_COLLECTION"] = collection_name or "documents"
+            logger.info(f"Switched to Qdrant database: {db_path} with collection: {collection_name or 'documents'}")
+        else:
+            os.environ["CHROMA_DB_PATH"] = db_path
+            logger.info(f"Switched to Chroma database: {db_path}")
+        
+        # 清除缓存，强制重新加载
+        clear_retriever_cache()
+        
+        return {
+            "success": True,
+            "message": f"Vector database switched to: {db_path} (type: {db_type})",
+            "db_path": db_path,
+            "db_type": db_type,
+            "collection_name": collection_name if db_type == "qdrant" else None
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error switching vector database: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error switching vector database: {str(e)}")
+
+
 
 
 app.include_router(router)

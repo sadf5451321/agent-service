@@ -23,7 +23,6 @@ def calculator_func(expression: str) -> str:
     Returns:
         str: The result of the math expression.
     """
-
     try:
         local_dict = {"pi": math.pi, "e": math.e}
         output = str(
@@ -48,9 +47,6 @@ calculator.name = "Calculator"
 # Format retrieved documents
 def format_contexts(docs):
     return "\n\n".join(doc.page_content for doc in docs)
-
-
-
 
 def get_embeddings():
     """Get the embeddings for the local model or OpenAi model."""
@@ -113,13 +109,24 @@ _embeddings_cache = None  # 添加这行
 _embeddings_lock = threading.Lock()  # 添加这行
 
 
+import logging
+def clear_retriever_cache():
+    logger = logging.getLogger(__name__)
+    global _vector_db_retriever,_current_db_path
+    with _vector_db_lock:
+        _vector_db_retriever = None
+        _current_db_path = None
+        logger.info("Vector database retriever cache cleared")
+    
+
+
 def _get_retriever():
     """
     获取缓存的 retriever，如果不存在则创建。
     使用双重检查锁定模式确保线程安全。
     """
     global _vector_db_retriever
-    import logging
+    
     logger = logging.getLogger(__name__)
     
     if _vector_db_retriever is None:

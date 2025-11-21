@@ -238,9 +238,18 @@ async def main() -> None:
             
             # 数据库配置选项
             st.markdown("### ⚙️ 数据库配置")
+            
+            # 新增：数据库类型选择
+            db_type = st.selectbox(
+                "数据库类型",
+                options=["qdrant", "chroma"],
+                index=0,  # 默认 Qdrant
+                help="选择要创建的向量数据库类型"
+            )
+            
             db_name = st.text_input(
                 "数据库名称",
-                value="chroma_db_uploaded",
+                value=f"qdrant_db_uploaded" if db_type == "qdrant" else "chroma_db_uploaded",
                 help="向量数据库的存储路径"
             )
             
@@ -262,10 +271,24 @@ async def main() -> None:
                 help="相邻文本块之间的重叠字符数"
             )
             
-            use_local_embeddings = st.toggle(
+            use_local_embedding = st.toggle(  # 修复：改为单数
                 "使用本地 Embedding 模型",
-                value=False,
-                help="如果启用，使用本地模型（需要设置 USE_LOCAL_MODEL=true）"
+                value=True,  # 修复：改为 True，匹配后端默认值
+                help="如果启用，使用本地模型（需要模型已下载到缓存）"
+            )
+            
+            # 新增：模型名称输入
+            model_name = st.text_input(
+                "模型名称",
+                value="BAAI/bge-m3",
+                help="本地 embedding 模型名称"
+            )
+            
+            # 新增：自动切换选项
+            auto_switch = st.toggle(
+                "创建后自动切换",
+                value=True,
+                help="创建数据库后自动切换到该数据库"
             )
             
             # 创建数据库按钮
@@ -278,27 +301,89 @@ async def main() -> None:
                         db_name=db_name,
                         chunk_size=chunk_size,
                         overlap=overlap,
-                        use_local_embeddings=use_local_embeddings
+                        use_local_embedding=use_local_embedding,  # 修复：改为单数
+                        model_name=model_name,  # 新增
+                        auto_switch=auto_switch,  # 新增
+                        db_type=db_type,  # 新增
                     )
         
         # 数据库选择器
         st.markdown("---")
         with st.popover(":material/storage: 向量数据库管理", use_container_width=True):
-            available_dbs = get_available_databases()
-            if available_dbs:
-                selected_db = st.selectbox(
+            # 显示当前使用的数据库
+            current_db_path = st.session_state.get("current_db_path", 
+                os.getenv("QDRANT_PATH") or os.getenv("CHROMA_DB_PATH", "./qdrant_db"))
+            current_db_type = st.session_state.get("current_db_type", 
+                os.getenv("VECTOR_DB_TYPE", "qdrant").lower())
+            
+            if current_db_path and os.path.exists(current_db_path):
+                db_type_icon = "🔷" if current_db_type == "qdrant" else "🔶"
+                st.info(f"{db_type_icon} **当前使用: {current_db_type.upper()}** 数据库\n`{current_db_path}`")
+            
+            st.markdown("---")
+            
+            # 获取数据库信息列表
+            db_info_list = _get_available_databases_info()
+            
+            if db_info_list:
+                # 创建带类型标签的选项列表
+                db_options = []
+                for info in db_info_list:
+                    db_type_icon = "🔷" if info["type"] == "qdrant" else "🔶"
+                    label = f"{db_type_icon} [{info['type'].upper()}] {info['path']}"
+                    db_options.append(label)
+                
+                # 找到当前数据库的索引
+                default_index = 0
+                for idx, info in enumerate(db_info_list):
+                    if info["path"] == current_db_path:
+                        default_index = idx
+                        break
+                
+                selected_label = st.selectbox(
                     "选择向量数据库",
-                    options=available_dbs,
-                    index=0,
-                    help="选择要使用的向量数据库"
+                    options=db_options,
+                    index=default_index,
+                    help="选择要使用的向量数据库（🔷 QDRANT 或 🔶 CHROMA）"
                 )
-                if st.button("✅ 使用此数据库", use_container_width=True):
-                    # 设置环境变量或更新配置
-                    os.environ["CHROMA_DB_PATH"] = selected_db
-                    st.success(f"已切换到数据库: {selected_db}")
-                    st.rerun()
+                
+                # 获取选中的数据库信息
+                selected_index = db_options.index(selected_label)
+                selected_info = db_info_list[selected_index]
+                selected_db = selected_info["path"]
+                selected_db_type = selected_info["type"]
+                
+                # 显示选中数据库的详细信息
+                with st.expander("📋 数据库详情", expanded=False):
+                    st.markdown(f"**类型:** {selected_db_type.upper()}")
+                    st.markdown(f"**路径:** `{selected_db}`")
+                    if selected_db_type == "qdrant":
+                        st.markdown(f"**集合名:** documents")
+                
+                if st.button("✅ 切换到该数据库", use_container_width=True, type="primary"):
+                    with st.spinner(f"正在切换到 {selected_db_type.upper()} 数据库..."):
+                        success = await switch_vector_database(
+                            db_path=selected_db,
+                            db_type=selected_db_type,
+                            collection_name="documents" if selected_db_type == "qdrant" else None
+                        )
+                    
+                    if success:
+                        st.session_state["current_db_path"] = selected_db
+                        st.session_state["current_db_type"] = selected_db_type
+                        st.success(f"✅ 已切换到 **{selected_db_type.upper()}** 数据库！")
+                        st.info(f"路径: `{selected_db}`\n\n💡 提示：新的查询将使用此数据库进行检索")
+                        st.rerun()
+                    else:
+                        st.error("❌ 切换数据库失败，请检查后端服务状态或重试")
             else:
                 st.info("暂无可用的向量数据库")
+                st.markdown("""
+                **提示：**
+                - 使用"上传文件并创建向量数据库"功能可以创建新数据库
+                - 或者确保数据库文件存在于项目目录中
+                - 支持的数据库类型：ChromaDB 和 Qdrant
+                """)
 
     # Draw existing messages
     # Draw existing messages
@@ -661,150 +746,111 @@ async def create_vector_db_from_files(
     db_name: str = "./chroma_db_uploaded",
     chunk_size: int = 2000,
     overlap: int = 500,
-    use_local_embeddings: bool = False,
+    use_local_embedding: bool = True,  # 修复：改为单数
+    model_name: str = "BAAI/bge-m3",  # 新增
+    auto_switch: bool = True,  # 新增
+    db_type: str = "qdrant",  # 新增
 ) -> None:
     """
-    从上传的文件创建向量数据库
+    从上传的文件创建向量数据库（通过后端 API）
     
     Args:
         uploaded_files: Streamlit 上传的文件列表
         db_name: 数据库名称/路径
         chunk_size: 文本块大小
         overlap: 文本块重叠
-        use_local_embeddings: 是否使用本地 embedding 模型
+        use_local_embedding: 是否使用本地 embedding 模型（注意：单数形式）
+        model_name: 模型名称
+        auto_switch: 是否自动切换到新创建的数据库
+        db_type: 数据库类型 ("chroma" 或 "qdrant")
     """
-    from dotenv import load_dotenv
-    
-    load_dotenv()
-    
     progress_bar = st.progress(0)
     status_text = st.empty()
     
     try:
-        # 创建临时目录存储上传的文件
-        with tempfile.TemporaryDirectory() as temp_dir:
-            status_text.text("📥 保存上传的文件...")
-            progress_bar.progress(10)
-            
-            # 保存所有上传的文件到临时目录
-            saved_files = []
-            for i, uploaded_file in enumerate(uploaded_files):
-                file_path = os.path.join(temp_dir, uploaded_file.name)
-                with open(file_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                saved_files.append(file_path)
-            
-            status_text.text("🔧 初始化 Embedding 模型...")
-            progress_bar.progress(20)
-            
-            # 获取 embeddings
-            if use_local_embeddings:
-                from langchain_community.embeddings import HuggingFaceEmbeddings
-                cache_folder = os.path.join(os.getcwd(), "embedding.model")
-                model_name = os.getenv("LOCAL_MODEL_NAME", "BAAI/bge-small-en-v1.5")
-                os.environ.setdefault("HF_HUB_OFFLINE", "1")
-                embeddings = HuggingFaceEmbeddings(
-                    model_name=model_name,
-                    cache_folder=cache_folder,
-                    model_kwargs={"device": "cpu"},
-                    encode_kwargs={"normalize_embeddings": True},
-                )
-            else:
-                from langchain_openai import OpenAIEmbeddings
-                embeddings = OpenAIEmbeddings()
-            
-            status_text.text("🗄️ 创建向量数据库...")
-            progress_bar.progress(30)
-            
-            # 如果数据库已存在，删除它
-            if os.path.exists(db_name):
-                shutil.rmtree(db_name)
-                status_text.text(f"🗑️ 删除现有数据库: {db_name}")
-            
-            # 创建 Chroma 数据库
-            chroma = Chroma(
-                embedding_function=embeddings,
-                persist_directory=db_name,
-            )
-            
-            # 初始化文本分割器
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=chunk_size,
-                chunk_overlap=overlap
-            )
-            
-            # 处理每个文件
-            total_chunks = 0
-            total_files = len(saved_files)
-            
-            for file_idx, file_path in enumerate(saved_files):
-                filename = os.path.basename(file_path)
-                status_text.text(f"📄 处理文件 {file_idx + 1}/{total_files}: {filename}")
-                progress = 30 + int((file_idx / total_files) * 60)
-                progress_bar.progress(progress)
-                
-                try:
-                    # 根据文件类型选择加载器
-                    if filename.endswith(".pdf"):
-                        loader = PyPDFLoader(file_path)
-                    elif filename.endswith(".docx"):
-                        loader = Docx2txtLoader(file_path)
-                    elif filename.endswith(".txt"):
-                        try:
-                            loader = TextLoader(file_path, encoding="utf-8")
-                        except UnicodeDecodeError:
-                            try:
-                                loader = TextLoader(file_path, encoding="gbk")
-                            except UnicodeDecodeError:
-                                loader = TextLoader(file_path, encoding="latin-1")
-                    else:
-                        st.warning(f"跳过不支持的文件类型: {filename}")
-                        continue
-                    
-                    # 加载并分割文档
-                    documents = loader.load()
-                    chunks = text_splitter.split_documents(documents)
-                    
-                    # 添加到向量数据库
-                    if chunks:
-                        chroma.add_documents(chunks)
-                        total_chunks += len(chunks)
-                        st.success(f"✅ {filename}: 添加了 {len(chunks)} 个文本块")
-                    
-                except Exception as e:
-                    st.error(f"❌ 处理文件 {filename} 时出错: {str(e)}")
-                    continue
-            
-            progress_bar.progress(100)
+        # 准备文件数据
+        status_text.text("📤 准备上传文件...")
+        progress_bar.progress(10)
+        
+        agent_client: AgentClient = st.session_state.agent_client
+        files_data = []
+        for uploaded_file in uploaded_files:
+            file_content = uploaded_file.getvalue()
+            files_data.append((uploaded_file.name, file_content))
+        
+        status_text.text("📥 上传文件到服务器...")
+        progress_bar.progress(20)
+        
+        # 调用后端 API（修复：使用正确的参数名和新增的参数）
+        result = await agent_client.aupload_files_and_create_vector_db(
+            files=files_data,
+            db_name=db_name,
+            chunk_size=chunk_size,
+            overlap=overlap,
+            use_local_embedding=use_local_embedding,  # 修复：改为单数
+            model_name=model_name,  # 新增
+            auto_switch=auto_switch,  # 新增
+            db_type=db_type,  # 新增
+        )
+        
+        progress_bar.progress(100)
+        
+        if result.get("success"):
             status_text.text("✅ 向量数据库创建完成！")
+            
+            # 显示数据库类型信息
+            created_db_type = result.get("db_type", db_type)
             
             st.success(f"""
             **向量数据库创建成功！**
             
-            - 📁 数据库路径: `{db_name}`
-            - 📄 处理文件数: {total_files}
-            - 📝 总文本块数: {total_chunks}
-            - 🔧 Embedding 模型: {'本地模型' if use_local_embeddings else 'OpenAI'}
-            
-            现在你可以在"向量数据库管理"中选择使用此数据库。
+            - 📁 数据库路径: `{result.get('db_path', db_name)}`
+            - 🗄️ 数据库类型: {created_db_type.upper()}
+            - 📄 处理文件数: {result.get('total_files', 0)}
+            - 📝 总文本块数: {result.get('total_chunks', 0)}
+            - 🔧 Embedding 模型: {'本地模型' if use_local_embedding else 'OpenAI'} ({model_name})
             """)
             
-            # 更新环境变量
-            os.environ["CHROMA_DB_PATH"] = db_name
-            st.session_state["last_created_db"] = db_name
+            # 显示自动切换信息
+            if result.get("switched"):
+                st.info("✅ 已自动切换到新创建的数据库！")
+            elif auto_switch:
+                st.warning(f"⚠️ 自动切换失败: {result.get('switch_error', '未知错误')}")
+            
+            # 显示处理的文件
+            if result.get("processed_files"):
+                st.info("处理的文件：")
+                for file_info in result["processed_files"]:
+                    st.text(f"  ✅ {file_info['filename']}: {file_info['chunks']} 个文本块")
+            
+            # 显示错误（如果有）
+            if result.get("errors"):
+                st.warning("部分错误：")
+                for error in result["errors"]:
+                    st.text(f"  ⚠️ {error}")
+            
+            # 更新 session state
+            if result.get("switched"):
+                st.session_state["current_db_path"] = result.get("db_path", db_name)
+                st.session_state["current_db_type"] = created_db_type
+        else:
+            status_text.text("❌ 创建向量数据库失败")
+            st.error(f"创建向量数据库时出错: {', '.join(result.get('errors', ['未知错误']))}")
             
     except Exception as e:
+        progress_bar.progress(0)
+        status_text.text("❌ 发生错误")
         st.error(f"❌ 创建向量数据库时出错: {str(e)}")
         import traceback
         st.code(traceback.format_exc())
 
 
-def get_available_databases() -> list[str]:
+def get_available_databases() -> list[dict[str, str]]:
     """
-    获取可用的向量数据库列表
+    获取可用的向量数据库列表（返回详细信息）
     
     Returns:
-        数据库路径列表
+        包含数据库路径和类型的字典列表
     """
     databases = []
     
@@ -817,31 +863,123 @@ def get_available_databases() -> list[str]:
     ]
     
     for db_path in common_paths:
-        if os.path.exists(db_path):
-            # 检查是否是有效的数据库目录
-            if os.path.isdir(db_path):
-                # ChromaDB 通常有这些文件/目录
-                if any(
-                    os.path.exists(os.path.join(db_path, item))
-                    for item in ["chroma.sqlite3", "chroma.sqlite3-wal", "index"]
-                ):
-                    databases.append(db_path)
-                # Qdrant 数据库
-                elif os.path.exists(os.path.join(db_path, "config.json")):
-                    databases.append(db_path)
+        if os.path.exists(db_path) and os.path.isdir(db_path):
+            # 检测数据库类型
+            if os.path.exists(os.path.join(db_path, "config.json")):
+                db_type = "qdrant"
+                databases.append({"path": db_path, "type": db_type})
+            elif any(
+                os.path.exists(os.path.join(db_path, item))
+                for item in ["chroma.sqlite3", "chroma.sqlite3-wal", "index"]
+            ):
+                db_type = "chroma"
+                databases.append({"path": db_path, "type": db_type})
     
-    # 也检查项目根目录下的其他可能的数据库
+    # 检查项目根目录下的其他可能的数据库
     project_root = Path(__file__).parent.parent.parent
     for item in project_root.iterdir():
         if item.is_dir() and ("chroma" in item.name.lower() or "qdrant" in item.name.lower()):
-            if item.name not in databases:
-                db_path = str(item)
-                if os.path.exists(os.path.join(db_path, "chroma.sqlite3")) or os.path.exists(
-                    os.path.join(db_path, "config.json")
-                ):
-                    databases.append(db_path)
+            db_path = str(item)
+            if os.path.exists(os.path.join(db_path, "chroma.sqlite3")):
+                if {"path": db_path, "type": "chroma"} not in databases:
+                    databases.append({"path": db_path, "type": "chroma"})
+            elif os.path.exists(os.path.join(db_path, "config.json")):
+                if {"path": db_path, "type": "qdrant"} not in databases:
+                    databases.append({"path": db_path, "type": "qdrant"})
     
-    return sorted(databases) if databases else []
+    return sorted(databases, key=lambda x: x["path"]) if databases else []
+
+def _get_available_databases_info() -> list[dict[str, str]]:
+    """
+    获取可用的向量数据库详细信息
+    
+    Returns:
+        包含数据库路径和类型的字典列表
+    """
+    databases = []
+    
+    # 检查常见的数据库路径
+    common_paths = [
+        "./chroma_db",
+        "./chroma_db_mixed",
+        "./chroma_db_uploaded",
+        "./qdrant_db",
+    ]
+    
+    for db_path in common_paths:
+        if os.path.exists(db_path) and os.path.isdir(db_path):
+            # 检测数据库类型
+            if os.path.exists(os.path.join(db_path, "config.json")):
+                databases.append({"path": db_path, "type": "qdrant"})
+            elif any(
+                os.path.exists(os.path.join(db_path, item))
+                for item in ["chroma.sqlite3", "chroma.sqlite3-wal", "index"]
+            ):
+                databases.append({"path": db_path, "type": "chroma"})
+    
+    # 检查项目根目录下的其他可能的数据库
+    project_root = Path(__file__).parent.parent.parent
+    for item in project_root.iterdir():
+        if item.is_dir() and ("chroma" in item.name.lower() or "qdrant" in item.name.lower()):
+            db_path = str(item)
+            if os.path.exists(os.path.join(db_path, "chroma.sqlite3")):
+                if not any(d["path"] == db_path for d in databases):
+                    databases.append({"path": db_path, "type": "chroma"})
+            elif os.path.exists(os.path.join(db_path, "config.json")):
+                if not any(d["path"] == db_path for d in databases):
+                    databases.append({"path": db_path, "type": "qdrant"})
+    
+    return sorted(databases, key=lambda x: x["path"]) if databases else []
+
+import httpx
+import logging
+logger = logging.getLogger(__name__)
+async def switch_vector_database(
+    db_path: str,
+    db_type: str = None,  # 新增：数据库类型参数
+    collection_name: str = None,  # 新增：集合名参数
+) -> bool:
+    """
+    通过后端 API 切换向量数据库
+    
+    Args:
+        db_path: 数据库路径
+        db_type: 数据库类型（如果不提供，从路径推断）
+        collection_name: 集合名（仅 Qdrant 需要）
+    
+    Returns:
+        是否切换成功
+    """
+    try:
+        agent_client: AgentClient = st.session_state.agent_client
+        
+        # 如果没有提供 db_type，从路径推断
+        if db_type is None:
+            if "qdrant" in db_path.lower():
+                db_type = "qdrant"
+            elif "chroma" in db_path.lower():
+                db_type = "chroma"
+            else:
+                # 尝试检查目录内容判断类型
+                if os.path.exists(os.path.join(db_path, "config.json")):
+                    db_type = "qdrant"
+                elif os.path.exists(os.path.join(db_path, "chroma.sqlite3")):
+                    db_type = "chroma"
+                else:
+                    # 默认使用当前环境变量设置的类型
+                    db_type = os.getenv("VECTOR_DB_TYPE", "qdrant").lower()
+        
+        # 调用后端 API 切换数据库（修复：传递 db_type 和 collection_name）
+        result = await agent_client.aswitch_vector_db(
+            db_path=db_path,
+            db_type=db_type,
+            collection_name=collection_name or ("documents" if db_type == "qdrant" else None)
+        )
+        
+        return result.get("success", False)
+    except Exception as e:
+        logger.error(f"Error switching database: {e}")
+        return False
 
 
 if __name__ == "__main__":
